@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CSV Doctor — clean messy spreadsheets, offline</title>
+<style>
+:root{
+  --bg:#0e1116; --panel:#161b22; --line:#262d38; --ink:#e6edf3; --dim:#8b949e;
+  --acc:#3fb950; --warn:#d29922; --bad:#f85149; --blue:#58a6ff;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Microsoft YaHei",sans-serif}
+.wrap{max-width:1040px;margin:0 auto;padding:28px 20px 80px}
+h1{font-size:26px;margin:0 0 6px;letter-spacing:-.3px}
+.sub{color:var(--dim);margin:0 0 22px;font-size:14px}
+.badge{display:inline-block;font-size:11px;padding:2px 8px;border:1px solid var(--line);border-radius:20px;color:var(--dim);margin-left:8px;vertical-align:2px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+button{background:var(--acc);color:#04140a;border:0;border-radius:7px;padding:9px 18px;font-weight:650;font-size:14px;cursor:pointer}
+button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line);font-weight:500}
+button:disabled{opacity:.4;cursor:not-allowed}
+textarea{width:100%;min-height:150px;background:#0b0f14;border:1px solid var(--line);border-radius:8px;color:var(--ink);padding:12px;font:12.5px/1.5 ui-monospace,Consolas,monospace;resize:vertical}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:14px 0}
+.stat{background:#0b0f14;border:1px solid var(--line);border-radius:8px;padding:11px 13px}
+.stat b{display:block;font-size:22px;letter-spacing:-.5px}
+.stat span{font-size:11.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
+table{width:100%;border-collapse:collapse;font:12.5px/1.5 ui-monospace,Consolas,monospace}
+th,td{text-align:left;padding:6px 9px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px}
+th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+.scroll{overflow:auto;max-height:380px;border:1px solid var(--line);border-radius:8px}
+.fix{color:var(--bad);text-decoration:line-through;opacity:.75}
+.ok{color:var(--acc)}
+.note{color:var(--dim);font-size:12.5px;margin-top:10px}
+.hide{display:none}
+.issue{font-size:12.5px;padding:5px 0;border-bottom:1px dashed var(--line);color:var(--dim)}
+.issue b{color:var(--ink);font-weight:600}
+code{background:#0b0f14;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>CSV Doctor <span class="badge">runs fully offline</span></h1>
+  <p class="sub">Paste a broken export. Get back a clean CSV plus a list of what was wrong. Nothing leaves this page.</p>
+
+  <div class="panel">
+    <div class="row" style="margin-bottom:10px">
+      <label class="ghost" for="file" style="display:inline-block;border:1px solid var(--line);border-radius:7px;padding:9px 18px;font-size:14px;cursor:pointer">Upload CSV</label>
+      <input type="file" id="file" accept=".csv,.tsv,.txt" hidden>
+      <button class="ghost" id="demo">Load messy sample</button>
+    </div>
+    <textarea id="input" placeholder="Order ID;Customer;Amount;Qty x Pack;Date;Note
+1001;  Acme  Ltd ;￥1,299.00;3 x 12;2026/03/04;  ok
+1002；Ｂｅｔａ　ＧｍｂＨ；RMB 880；2x6；2026-03-05；"></textarea>
+    <div class="row" style="margin-top:12px">
+      <button id="run">Clean it</button>
+      <button class="ghost" id="dl" disabled>Download clean CSV</button>
+      <span class="note" id="status" style="margin:0"></span>
+    </div>
+  </div>
+
+  <div id="out" class="hide">
+    <div class="grid" id="stats"></div>
+
+    <div class="panel">
+      <div style="font-size:13px;font-weight:650;margin-bottom:8px">What was wrong</div>
+      <div id="issues"></div>
+    </div>
+
+    <div class="panel">
+      <div style="font-size:13px;font-weight:650;margin-bottom:8px">Preview <span class="note" id="prevNote"></span></div>
+      <div class="scroll"><table id="prev"></table></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+"use strict";
+
+/* ---------- CSV parse: handles quotes, CRLF, delimiter sniffing ---------- */
+function sniff(text){
+  const head = text.slice(0, 4000);
+  const cands = [",",";","\t","|"];
+  let best = ",", bestScore = -1;
+  for (const d of cands){
+    let counts = [], buf = "", inQ = false;
+    for (let i=0;i<head.length;i++){
+      const c = head[i];
+      if (c === '"') inQ = !inQ;
+      if (c === "\n" && !inQ){ counts.push(buf.split(d).length); buf=""; }
+      else buf += c;
+    }
+    if (buf) counts.push(buf.split(d).length);
+    if (!counts.length) continue;
+    const mode = counts.sort((a,b)=>a-b)[Math.floor(counts.length/2)];
+    if (mode > bestScore){ bestScore = mode; best = d; }
+  }
+  return best;
+}
+
+function parse(text, d){
+  text = text.replace(/^\uFEFF/, "");
+  const rows = []; let row = [], cell = "", inQ = false;
+  for (let i=0;i<text.length;i++){
+    const c = text[i];
+    if (inQ){
+      if (c === '"' && text[i+1] === '"'){ cell += '"'; i++; }
+      else if (c === '"'){ inQ = false; }
+      else cell += c;
+    } else {
+      if (c === '"'){ inQ = true; }
+      else if (c === d){ row.push(cell); cell = ""; }
+      else if (c === "\n"){ row.push(cell); rows.push(row); row = []; cell = ""; }
+      else if (c === "\r"){ }
+      else cell += c;
+    }
+  }
+  if (cell.length || row.length){ row.push(cell); rows.push(row); }
+  return rows.filter(r => !(r.length === 1 && r[0].trim() === ""));
+}
+
+function toCSV(rows){
+  return rows.map(r => r.map(v => {
+    const s = String(v == null ? "" : v);
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
+  }).join(",")).join("\n");
+}
+
+/* ---------- cleaning rules: deterministic only, never guesses ---------- */
+const FULLWIDTH = /[\uFF01-\uFF5E]/g;
+function fw(s){ return s.replace(FULLWIDTH, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)); }
+
+function cleanCell(raw, col, report){
+  let s = String(raw == null ? "" : raw);
+  const before = s;
+
+  s = fw(s);
+  if (s !== before) report.tally("fullwidth chars converted", col);
+
+  s = s.replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
+  if (s !== before.replace(/\s+/g," ").trim() && s.length) report.tally("whitespace trimmed", col);
+
+  // currency: ￥ / RMB / CNY / 元 -> ¥
+  const curBefore = s;
+  s = s.replace(/[￥¥]\s*/g, "¥").replace(/\b(RMB|CNY|CN¥)\b\s*/gi, "¥").replace(/(\d)\s*元/g, "$1");
+  if (s !== curBefore) report.tally("currency symbol normalised", col);
+
+  // thousands separators inside pure numbers (currency prefix allowed): $1,299.00 -> $1299.00
+  const num = s.match(/^([$¥])?\s*([-+]?[\d,]+(\.\d+)?)$/);
+  if (num && num[2].includes(",")){
+    s = (num[1] || "") + num[2].replace(/,/g, "");
+    report.tally("thousands separator removed", col);
+  }
+
+  // trailing .00 on integers
+  const z = s.match(/^([$¥])?\s*([-+]?\d+)\.0{1,2}$/);
+  if (z) { s = (z[1] || "") + z[2]; report.tally("trailing zeros dropped", col); }
+
+  // multiplication: only between digits, so "3x4" -> "3 × 4" but "Xbox" untouched
+  const mulBefore = s;
+  s = s.replace(/(?<=\d)\s*[x×X*]\s*(?=\d)/g, " × ");
+  if (s !== mulBefore) report.tally("multiplication sign normalised", col);
+
+  // percent with space: "12 %" -> "12%"
+  s = s.replace(/(\d)\s+%/g, "$1%");
+
+  // dates: only the unambiguous year-first forms. 03/06/2026 stays untouched
+  // because nobody can tell March 6 from June 3.
+  const ym = s.match(/^(\d{4})[\/.\-年](\d{1,2})[\/.\-月](\d{1,2})日?$/);
+  if (ym){
+    const v = `${ym[1]}-${String(ym[2]).padStart(2,"0")}-${String(ym[3]).padStart(2,"0")}`;
+    if (v !== s){ s = v; report.tally("date normalised to ISO", col); }
+  }
+
+  return s;
+}
+
+/* A number like $10,000.50 that was never quoted gets split into "$10" and "000.50".
+   Naive cleaners truncate the row and silently destroy the amount. Rejoin instead,
+   but only when the merged value is a valid thousands-grouped number and the row
+   still has more fields than the header. */
+function rejoinNumeric(row, width){
+  const out = [];
+  let i = 0;
+  while (i < row.length){
+    const need = row.length - i > width - out.length;
+    if (need && i + 1 < row.length){
+      const a = row[i], b = row[i + 1];
+      const merged = a + "," + b;
+      if (/^[$¥￥]?[-+]?\d{1,3}$/.test(a) &&
+          /^\d{3}(\.\d+)?$/.test(b) &&
+          /^[$¥￥]?[-+]?\d{1,3}(,\d{3})+(\.\d+)?$/.test(merged)){
+        out.push(merged); i += 2; continue;
+      }
+    }
+    out.push(row[i]); i++;
+  }
+  return out;
+}
+
+function clean(rows, opts){  const report = { counts: {}, examples: [] };
+  const tally = (k, col) => { report.counts[k] = (report.counts[k] || 0) + 1; };
+  report.tally = tally;
+
+  if (!rows.length) return { rows: [], report, stats: {} };
+  const width = rows[0].length;
+
+  // header
+  const header = rows[0].map((h,i) => cleanCell(h, "header " + (i+1), report));
+
+  const body = rows.slice(1);
+  const out = [];
+  const seen = new Set();
+  let dupes = 0, ragged = 0, empties = 0;
+  const shortRows = [];
+
+  for (let r = 0; r < body.length; r++){
+    let raw = body[r];
+    if (raw.length > width) raw = rejoinNumeric(raw, width);
+    if (raw.length !== width){
+      ragged++; shortRows.push(r + 2);
+      // wider than the header: keep every cell, never silently truncate
+      while (raw.length < width) raw.push("");
+    }
+    let row = raw.map((c,i) => cleanCell(c, header[i] || ("col " + (i+1)), report));
+    const key = row.join("\u0001");
+    if (key.replace(/\u0001/g,"").trim() === ""){ empties++; continue; }
+    if (seen.has(key)){ dupes++; continue; }
+    seen.add(key);
+    row.forEach(v => { if (v === "") empties++; });
+    out.push(row);
+  }
+
+  if (dupes) report.counts["duplicate rows removed"] = dupes;
+  if (ragged) report.counts["ragged rows repaired"] = ragged;
+
+  // empty column warning
+  const emptyByCol = header.map((h,i) => out.filter(r => (r[i] || "") === "").length);
+  const risky = header.map((h,i) => ({ h, n: emptyByCol[i], pct: out.length ? emptyByCol[i]/out.length : 0 }))
+                      .filter(x => x.pct >= 0.4 && out.length >= 5);
+
+  // ambiguous dates: flag the column, never rewrite it
+  const ambiguous = header.filter((h,i) => {
+    const vals = out.map(r => r[i] || "").filter(Boolean);
+    if (vals.length < 3) return false;
+    const hits = vals.filter(v => /^\d{1,2}[\/.]\d{1,2}[\/.]\d{2,4}$/.test(v)).length;
+    return hits / vals.length > 0.5;
+  });
+
+  return { rows: [header].concat(out), report, stats: {
+    rowsIn: body.length, rowsOut: out.length, dupes, ragged, shortRows: shortRows.slice(0,8),
+    cols: width, emptySpots: empties, risky, ambiguous, issues: Object.keys(report.counts).length
+  }};
+}
+
+/* ---------- demo data ---------- */
+const DEMO = `Order ID;Customer;Amount;Qty x Pack;Date;Note;Sales
+1001;  Acme  Ltd ;￥1,299.00;3 x 12;2026/03/04;  ok ;12%
+1002；Ｂｅｔａ　ＧｍｂＨ；RMB 880；2x6；2026-03-05；；
+1003;Gamma Co;$1,450.5;4 X 8;2026/03/05;rush;8 %
+1003;Gamma Co;$1,450.5;4 X 8;2026/03/05;rush;8 %
+1004;Delta;1,200元;1x1;03/06/2026;;5%
+1005;Epsilon Ltd;¥ 2,000.00;2 × 3;2026/03/06;;
+1006;Zeta;;1x4;2026/03/07;missing amount;4%
+1007;Eta Inc;RMB 640;6x2;2026/3/8;;
+1008;Theta;¥99.00;0x0;2026-03-08;zero pack;3%`;
+
+/* ---------- wiring ---------- */
+const $ = id => document.getElementById(id);
+const input = $("input"), out = $("out"), stats = $("stats"), issues = $("issues"), prev = $("prev");
+let lastCSV = "";
+
+function render(res){
+  const s = res.stats;
+  const cells = [
+    [s.rowsIn, "rows in"], [s.rowsOut, "rows out"],
+    [s.cols, "columns"], [s.dupes, "dupes removed"],
+    [s.ragged, "ragged rows"], [s.emptySpots, "empty cells"],
+    [s.issues, "rule hits"], [s.risky.length, "sparse columns"],
+  ];
+  stats.innerHTML = cells.map(([v,l]) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`).join("");
+
+  const list = Object.entries(res.report.counts).sort((a,b)=>b[1]-a[1]);
+  let html = list.length ? list.map(([k,v]) => `<div class="issue"><b>${v}×</b> ${k}</div>`).join("")
+                         : `<div class="issue">Nothing detected. The file may already be clean.</div>`;
+  if (s.risky.length) html += s.risky.map(x => `<div class="issue" style="color:var(--warn)"><b>${Math.round(x.pct*100)}% empty</b> column "${x.h}" — probably missing data, not a formatting error</div>`).join("");
+  if (s.ambiguous && s.ambiguous.length) html += s.ambiguous.map(h => `<div class="issue" style="color:var(--warn)"><b>ambiguous dates</b> column "${h}" — day and month cannot be told apart, so I left them alone instead of guessing wrong</div>`).join("");
+  if (s.shortRows.length) html += `<div class="issue" style="color:var(--warn)">rows that do not match the header width: ${s.shortRows.slice(0,10).join(", ")} — kept as-is, nothing truncated</div>`;
+  issues.innerHTML = html;
+
+  const rows = res.rows.slice(0, 21);
+  prev.innerHTML = rows.map((r,i) => "<tr>" + r.map(c => `<td>${String(c).replace(/[<>&]/g, m => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[m]))}</td>`).join("") + "</tr>").join("");
+  $("prevNote").textContent = `showing ${Math.min(21, res.rows.length)} of ${res.rows.length}`;
+  out.classList.remove("hide");
+  lastCSV = toCSV(res.rows);
+  $("dl").disabled = false;
+}
+
+function run(text){
+  if (!text.trim()){ $("status").textContent = "Nothing to clean."; return; }
+  const t0 = performance.now();
+
+  // full-width commas and semicolons are the single most common reason a
+  // "CSV" arrives as one giant column. Normalise them before parsing.
+  let src = text;
+  const fwDelim = (text.match(/[，；、]/g) || []).length;
+  if (fwDelim) src = text.replace(/，/g, ",").replace(/；/g, ";").replace(/、/g, ",");
+
+  const d = sniff(src);
+  const rows = parse(src, d);
+  if (fwDelim) rows.__fw = fwDelim;
+  const res = clean(rows);
+  if (fwDelim) res.report.counts["full-width delimiters fixed"] = fwDelim;
+  render(res);
+  $("status").textContent = `${rows.length-1} data rows parsed with "${d === "\t" ? "tab" : d}" in ${Math.round(performance.now()-t0)}ms`;
+}
+
+$("run").onclick = () => run(input.value);
+$("demo").onclick = () => { input.value = DEMO; run(DEMO); };
+$("file").onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  if (/\.xlsx?$/i.test(f.name)){ $("status").textContent = "That is an .xlsx. Open it and save as CSV first, or offload it to me."; return; }
+  const rd = new FileReader();
+  rd.onload = () => { input.value = rd.result; run(rd.result); };
+  rd.readAsText(f);
+};
+$("dl").onclick = () => {
+  const blob = new Blob([lastCSV], {type:"text/csv;charset=utf-8"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "cleaned.csv";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+};
+
+window.__td = { sniff, parse, clean, toCSV, DEMO };
+})();
+</script>
+</body>
+</html>
