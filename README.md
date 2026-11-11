@@ -3,7 +3,7 @@
 A single-file, offline CSV / Excel-export cleaner. No install, no upload, no account.
 Open `index.html` in a browser and paste your data in.
 
-**Live version:** https://csv-doctor.app.workbuddy.host/?sharecode=I7AADPFGF2
+**Live version:** https://luka916.github.io/csv-doctor/ — same file as `index.html`, served straight from this repo.
 
 ---
 
