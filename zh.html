@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>表格急救箱 · 本地 CSV 清洗</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2a2f3a;
+    --tx:#e6e9ef; --dim:#9aa3b2; --acc:#4f8cff; --ok:#28c76f; --warn:#ffab00; --bad:#ea5455;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);
+    font:15px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+  header{padding:28px 24px 18px;border-bottom:1px solid var(--line);background:var(--panel)}
+  h1{margin:0 0 6px;font-size:22px;letter-spacing:.5px}
+  .sub{color:var(--dim);font-size:13px}
+  .wrap{max-width:1080px;margin:0 auto;padding:22px 24px 80px}
+  .drop{border:2px dashed var(--line);border-radius:14px;padding:40px 20px;text-align:center;
+    transition:.15s;cursor:pointer;background:var(--panel)}
+  .drop:hover,.drop.on{border-color:var(--acc);background:var(--panel2)}
+  .drop b{font-size:17px}
+  .drop small{display:block;color:var(--dim);margin-top:8px;font-size:12.5px}
+  .row{display:flex;gap:12px;flex-wrap:wrap;margin-top:18px}
+  button{border:0;border-radius:9px;padding:11px 18px;font-size:14px;cursor:pointer;
+    background:var(--acc);color:#fff;font-weight:600}
+  button.ghost{background:var(--panel2);color:var(--tx);border:1px solid var(--line)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:22px 0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .card .n{font-size:26px;font-weight:700;line-height:1.2}
+  .card .l{color:var(--dim);font-size:12px;margin-top:2px}
+  .n.ok{color:var(--ok)} .n.warn{color:var(--warn)} .n.bad{color:var(--bad)}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:10px}
+  th,td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  th{color:var(--dim);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.4px}
+  .tag{display:inline-block;padding:1px 7px;border-radius:5px;font-size:11.5px;font-weight:600}
+  .t-auto{background:rgba(40,199,111,.16);color:#5ee79a}
+  .t-sug{background:rgba(255,171,0,.16);color:#ffc74d}
+  .t-rev{background:rgba(234,84,85,.16);color:#ff8a8b}
+  .hide{display:none}
+  pre{background:var(--panel2);padding:12px;border-radius:9px;overflow:auto;font-size:12.5px;
+    border:1px solid var(--line);max-height:280px}
+  .note{color:var(--dim);font-size:12.5px;margin-top:10px}
+  .sec{margin-top:30px}
+  .sec h2{font-size:15px;margin:0 0 8px;color:var(--tx)}
+  footer{position:fixed;bottom:0;left:0;right:0;background:var(--panel);border-top:1px solid var(--line);
+    padding:9px 24px;font-size:12px;color:var(--dim);text-align:center}
+</style>
+</head>
+<body>
+<a href="index.html" style="position:fixed;top:10px;right:14px;z-index:99;font-size:13px;line-height:1;color:#8b949e;text-decoration:none;border:1px solid rgba(128,128,128,.4);border-radius:999px;padding:5px 11px;background:rgba(128,128,128,.08)">English</a>
+<header>
+  <h1>表格急救箱 <span style="color:var(--dim);font-weight:400;font-size:14px">v1.0</span></h1>
+  <div class="sub">CSV / TSV 本地清洗 · 数据不上传 · 断网可用 · 自动区分「能改」「建议」「必须你决定」</div>
+</header>
+
+<div class="wrap">
+  <div class="drop" id="drop">
+    <b>把 CSV 文件拖到这里，或点击选择</b>
+    <small>支持 UTF-8 / GBK 自动识别（Excel 导出的中文 CSV 通常是 GBK）· 逗号/制表符自动判断 · 文件不会离开这台电脑</small>
+    <input type="file" id="file" accept=".csv,.tsv,.txt" class="hide">
+  </div>
+
+  <div class="row">
+    <button id="btnDemo" class="ghost">载入示例数据试试</button>
+    <button id="btnCsv" class="ghost" disabled>下载清洗后 CSV</button>
+    <button id="btnIssues" class="ghost" disabled>下载异常清单 CSV</button>
+  </div>
+
+  <div id="result" class="hide">
+    <div class="cards">
+      <div class="card"><div class="n" id="cRows">0</div><div class="l">数据行</div></div>
+      <div class="card"><div class="n" id="cCols">0</div><div class="l">列</div></div>
+      <div class="card"><div class="n ok" id="cFixed">0</div><div class="l">已自动修复</div></div>
+      <div class="card"><div class="n warn" id="cSuggest">0</div><div class="l">建议核对（未改值）</div></div>
+      <div class="card"><div class="n bad" id="cReview">0</div><div class="l">需你决定</div></div>
+    </div>
+
+    <div class="sec">
+      <h2>异常清单</h2>
+      <div class="note" id="issueNote"></div>
+      <table id="tbl">
+        <thead><tr><th style="width:60px">行</th><th style="width:100px">列</th><th style="width:88px">判定</th>
+        <th style="width:78px">规则</th><th>原值 → 处理</th><th style="width:26%">依据</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="sec">
+      <h2>清洗后预览（前 8 行）</h2>
+      <pre id="preview"></pre>
+    </div>
+  </div>
+</div>
+
+<footer>全部计算在你的浏览器里完成 · 无网络请求 · 无统计 · 关掉页面数据即消失</footer>
+
+<script>
+"use strict";
+
+/* ============================ 规则表 ============================ */
+const RULES = {
+  R001: "全角数字/标点转半角",
+  R002: "千分位逗号与货币符号清理",
+  R003: "首尾空白与不可见字符",
+  R004: "小数逗号歧义（1,25 可能是 1.25 或 125）",
+  R005: "规格乘号统一为 x",
+  R006: "重复行",
+  R007: "整行为空",
+  R008: "必填列出现空值",
+  R009: "同一列内单位不统一",
+  R010: "同一实体出现多个不同规格",
+  R011: "日期格式不统一",
+  R012: "数字型列混入文字",
+  R013: "行内列数与表头不符（多半是未加引号的逗号）",
+};
+
+/* ============================ 工具 ============================ */
+const toHalf = (s) => s
+  .replace(/[０-９]/g, (c) => String(c.charCodeAt(0) - 0xFF10))
+  .replace(/[Ａ-Ｚａ-ｚ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+  .replace(/[，]/g, ",").replace(/：/g, ":").replace(/；/g, ";")
+  .replace(/[￥]/g, "¥").replace(/[．]/g, ".");
+
+function parseCSV(text) {
+  const firstLine = text.slice(0, text.indexOf("\n") === -1 ? text.length : text.indexOf("\n"));
+  const counts = { ",": (firstLine.match(/,/g) || []).length, "\t": (firstLine.match(/\t/g) || []).length, ";": (firstLine.match(/;/g) || []).length };
+  const delim = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] || ",";
+  const rows = []; let row = []; let cur = ""; let q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; }
+      else cur += c;
+    } else if (c === '"') q = true;
+    else if (c === delim) { row.push(cur); cur = ""; }
+    else if (c === "\n") { row.push(cur); rows.push(row); row = []; cur = ""; }
+    else if (c === "\r") { /* skip */ }
+    else cur += c;
+  }
+  if (cur !== "" || row.length) { row.push(cur); rows.push(row); }
+  return { rows: rows.filter((r) => r.some((c) => c.trim() !== "") || r.length > 1), delim };
+}
+
+function toCSV(rows) {
+  return rows.map((r) => r.map((c) => {
+    const s = c == null ? "" : String(c);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }).join(",")).join("\r\n");
+}
+
+/* 判断列类型：数字 / 日期 / 文本 */
+function columnKinds(rows, header) {
+  const kinds = header.map(() => ({ num: 0, date: 0, text: 0, total: 0 }));
+  for (let r = 1; r < rows.length; r++) {
+    header.forEach((_, c) => {
+      const v = (rows[r][c] || "").trim();
+      if (!v) return;
+      kinds[c].total++;
+      const n = v.replace(/[,\s¥$€£￥元圆]/g, "").replace(/RMB|CNY|rmb|cny/gi, "");
+      if (n !== "" && !isNaN(Number(n))) { kinds[c].num++; return; }
+      if (/^\d{4}[-/年.]\d{1,2}[-/月.]\d{1,2}/.test(v)) kinds[c].date++;
+      else kinds[c].text++;
+    });
+  }
+  return kinds.map((k) => (k.total === 0 ? "text" : k.num / k.total > 0.7 ? "num" : k.date / k.total > 0.7 ? "date" : "text"));
+}
+
+/* ============================ 主流程 ============================ */
+function clean(rows) {
+  const header = rows[0].map((h) => h.trim());
+  const kinds = columnKinds(rows, header);
+  const out = [header.slice()];
+  const origRow = [1];
+  const issues = [];
+  const seen = new Map();
+
+  const add = (row, col, level, rule, before, after, basis) =>
+    issues.push({ row, col, level, rule, before: String(before ?? ""), after: String(after ?? ""), basis });
+
+  for (let r = 1; r < rows.length; r++) {
+    const src = rows[r];
+    const cell = new Array(header.length).fill("");
+    const rowNo = r + 1; // 1-based，含表头
+
+    // R007 整行为空
+    if (!src.some((c) => (c || "").trim() !== "")) {
+      add(rowNo, "—", "auto", "R007", "(空行)", "已删除", "整行没有任何内容，不会携带信息");
+      continue;
+    }
+
+    // R013 列数不符
+    if (src.length !== header.length) {
+      const diff = src.length - header.length;
+      add(rowNo, "整行", "review", "R013",
+        `${src.length} 列（表头 ${header.length} 列）`,
+        "未改动",
+        diff > 0
+          ? `多出 ${diff} 列，通常是某个字段里有未加引号的逗号（如 1,250），导致整行右移；这一行后面的值全部错位`
+          : `少了 ${-diff} 列，通常是末尾字段为空被省略，或该行被截断`);
+    }
+
+    for (let c = 0; c < header.length; c++) {
+      let v = src[c] == null ? "" : String(src[c]);
+      const raw = v;
+
+      // R003 空白与不可见字符
+      const trimmed = v.replace(/[\u200b\u00a0\ufeff]/g, " ").trim().replace(/\s+/g, " ");
+      if (trimmed !== v) { v = trimmed; add(rowNo, header[c], "auto", "R003", raw, v, "首尾空格/全角空格/零宽字符不影响含义，可直接去掉"); }
+
+      // R001 全角数字
+      const half = toHalf(v);
+      if (half !== v) { add(rowNo, header[c], "auto", "R001", v, half, "全角数字在计算与排序中会被当成文本，统一为半角不改变数值"); v = half; }
+
+      const k = kinds[c];
+
+      if (k === "num" || (k === "text" && /^[\s¥$€£￥]*[-+]?[\d,]+(\.\d+)?[\s元圆]*$/.test(v) && v !== "")) {
+        // R002 货币符号、千分位、单位
+        let n = v;
+
+        // R004 歧义：数字,两位/一位数字 —— 只在「不像千分位」时报警
+        const amb = n.match(/^([-+]?\d+),(\d{1,2})$/);
+        if (amb) {
+          // 1,25 → 大概率是 1.25（欧洲/中文习惯）；但 1,250 是千分位
+          const dec = amb[1] + "." + amb[2];
+          add(rowNo, header[c], "review", "R004", v, "未改动",
+            `「${v}」既可能是 ${dec}（小数逗号），也可能是 ${amb[1]}${amb[2]}（千分位写成两位）。两者差 ${Math.abs(Number(dec) - Number(amb[1] + amb[2])).toLocaleString()} 倍，机器不能替你猜`);
+          cell[c] = v; continue;
+        }
+
+        const cleaned = n.replace(/[¥$€£￥\s]/g, "").replace(/[元圆]$/, "").replace(/(RMB|CNY)/gi, "").replace(/,/g, "");
+        if (cleaned !== v && cleaned !== "" && !isNaN(Number(cleaned))) {
+          let norm = cleaned;
+          if (/\.00$/.test(norm)) norm = norm.replace(/\.00$/, "");
+          add(rowNo, header[c], "auto", "R002", v, norm,
+            "去掉货币符号与千分位逗号，数值不变；末尾 .00 一并省掉，避免同列既有 1250 又有 1250.00");
+          v = norm; n = norm;
+        }
+
+        // R012 数字列里混入文字
+        if (k === "num" && v !== "" && isNaN(Number(n))) {
+          add(rowNo, header[c], "review", "R012", raw, "未改动", `这一列 ${header[c]} 其余单元格都是数字，此格是文字，可能是串列或备注`);
+          cell[c] = v; continue;
+        }
+      }
+
+      // R005 规格乘号
+      if (/(?<=\d)\s*[x×X*✕✖]\s*(?=\d)/.test(v)) {
+        const canon = v.replace(/(?<=\d)\s*[x×X*✕✖]\s*(?=\d)/g, "x");
+        if (canon !== v) { add(rowNo, header[c], "auto", "R005", v, canon, "规格里的乘号写法不一（×、X、*），统一为 x 才能被检索和比较"); v = canon; }
+      }
+
+      // R011 日期
+      if (k === "date") {
+        const m = v.match(/^(\d{4})[-/年.](\d{1,2})[-/月.](\d{1,2})/);
+        if (m) {
+          const iso = `${m[1]}-${String(m[2]).padStart(2, "0")}-${String(m[3]).padStart(2, "0")}`;
+          if (iso !== v) { add(rowNo, header[c], "auto", "R011", v, iso, "同一列出现多种日期写法，统一为 YYYY-MM-DD 才能排序"); v = iso; }
+        }
+      }
+
+      cell[c] = v;
+    }
+
+    // R006 重复行
+    const key = cell.join("\u0001");
+    if (seen.has(key)) {
+      add(rowNo, "—", "suggest", "R006", "与第 " + seen.get(key) + " 行完全相同", "保留未删",
+        "完全重复的行通常是导出时重复计数；但取消重复需要你确认业务上确实是同一笔");
+    } else seen.set(key, rowNo);
+
+    out.push(cell);
+    origRow.push(rowNo);
+  }
+
+  // R008 必填空值（空值率 < 20% 的列才认为该填）
+  const nonEmpty = header.map((_, c) => out.slice(1).filter((r) => (r[c] || "").trim() !== "").length);
+  header.forEach((h, c) => {
+    const rate = nonEmpty[c] / Math.max(out.length - 1, 1);
+    if (rate > 0.8) {
+      out.slice(1).forEach((row, i) => {
+        if ((row[c] || "").trim() === "") {
+          add(origRow[i + 1], h, "review", "R008", "(空)", "未改动", `这一列 ${Math.round(rate * 100)}% 有值，空格大概率是漏填；补什么值需要你决定`);
+        }
+      });
+    }
+  });
+
+  // R009 单位不统一
+  header.forEach((h, c) => {
+    const units = new Set();
+    out.slice(1).forEach((r) => {
+      const m = (r[c] || "").match(/(箱|盒|包|卷|个|件|只|套|kg|g|kg|米|m|cm|mm|升|L|ml)$/i);
+      if (m) units.add(m[1].toLowerCase());
+    });
+    if (units.size > 1) {
+      add("多行", h, "review", "R009", [...units].join(" / "), "未改动",
+        `同一列出现 ${units.size} 种单位，无法直接相加或比价；部分单位之间不可换算`);
+    }
+  });
+
+  // R010 同规格不同名（规格+单位+品类词尾 三重一致才报）
+  const nameCol = header.findIndex((h) => /名称|品名|商品|name|item|desc/i.test(h));
+  const specCol = header.findIndex((h) => /规格|型号|spec|size/i.test(h));
+  const unitCol = header.findIndex((h) => /单位|unit/i.test(h));
+  if (nameCol >= 0 && specCol >= 0) {
+    const bySpec = new Map();
+    out.slice(1).forEach((r, i) => {
+      const sp = (r[specCol] || "").trim().toLowerCase();
+      const nm = (r[nameCol] || "").trim();
+      if (!sp || !nm) return;
+      const u = (unitCol >= 0 ? (r[unitCol] || "").trim() : "").toLowerCase();
+      const kk = sp + "|" + u;
+      if (!bySpec.has(kk)) bySpec.set(kk, []);
+      bySpec.get(kk).push({ nm, row: origRow[i + 1] });
+    });
+    bySpec.forEach((list, kk) => {
+      const names = [...new Set(list.map((x) => x.nm))];
+      if (names.length > 1 && names[0].slice(-2) === names[1].slice(-2)) {
+        add(list.map((x) => x.row).join(","), header[nameCol], "review", "R010",
+          names.join(" / "), "未改动",
+          `规格与单位完全相同（${kk.replace("|", " · ")}），却有两个名字且品类词尾一致，可能是同一货品的两种写法`);
+      }
+    });
+  }
+
+  return { header, out, issues, origRow };
+}
+
+/* ============================ UI ============================ */
+let state = { name: "table.csv", cleaned: null, issues: null };
+
+const $ = (id) => document.getElementById(id);
+const drop = $("drop"), fileInput = $("file");
+
+drop.addEventListener("click", () => fileInput.click());
+drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("on"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("on"));
+drop.addEventListener("drop", (e) => {
+  e.preventDefault(); drop.classList.remove("on");
+  if (e.dataTransfer.files[0]) readFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener("change", () => { if (fileInput.files[0]) readFile(fileInput.files[0]); });
+
+function decode(buf) {
+  const u8 = new Uint8Array(buf);
+  try {
+    const t = new TextDecoder("utf-8", { fatal: true }).decode(u8);
+    return { text: t, enc: "UTF-8" };
+  } catch (e) {
+    try { return { text: new TextDecoder("gbk").decode(u8), enc: "GBK" }; }
+    catch (e2) { return { text: new TextDecoder("utf-8").decode(u8), enc: "UTF-8(强制)" }; }
+  }
+}
+
+function readFile(f) {
+  state.name = f.name;
+  if (/\.(xlsx|xls|numbers|et)$/i.test(f.name)) {
+    drop.querySelector("b").textContent = "这是 Excel 文件，请先另存为 CSV";
+    drop.querySelector("small").innerHTML =
+      "在 Excel 里点 <b>文件 → 另存为 → CSV UTF-8（逗号分隔）</b>，再把那个 .csv 拖进来。<br>" +
+      "为什么要多这一步：直接读 .xlsx 需要把整个解析库塞进页面，会让文件体积翻十倍；这一步换来的是「完全离线、双击即用」。";
+    return;
+  }
+  const fr = new FileReader();
+  fr.onload = () => {
+    const { text, enc } = decode(fr.result);
+    run(parseCSV(text.replace(/^\ufeff/, "")).rows, enc);
+  };
+  fr.readAsArrayBuffer(f);
+}
+
+$("btnDemo").addEventListener("click", () => run(parseCSV(DEMO).rows, "示例"));
+function run(rows, enc) {
+  if (!rows.length) return;
+  const { header, out, issues } = clean(rows);
+  state.cleaned = out; state.issues = issues;
+
+  const n = (lvl) => issues.filter((i) => i.level === lvl).length;
+  $("cRows").textContent = out.length - 1;
+  $("cCols").textContent = header.length;
+  $("cFixed").textContent = n("auto");
+  $("cSuggest").textContent = n("suggest");
+  $("cReview").textContent = n("review");
+  $("result").classList.remove("hide");
+
+  const tb = $("tbl").querySelector("tbody");
+  tb.innerHTML = "";
+  const order = { review: 0, suggest: 1, auto: 2 };
+  issues.slice().sort((a, b) => (order[a.level] - order[b.level])).forEach((i) => {
+    const tr = document.createElement("tr");
+    const lvl = i.level === "auto" ? "t-auto" : i.level === "suggest" ? "t-sug" : "t-rev";
+    const lvlTxt = i.level === "auto" ? "已修复" : i.level === "suggest" ? "建议" : "待决定";
+    tr.innerHTML = `<td>${i.row}</td><td>${esc(i.col)}</td>
+      <td><span class="tag ${lvl}">${lvlTxt}</span></td>
+      <td>${i.rule}</td>
+      <td>${esc(i.before)}${i.after && i.after !== i.before ? " → " + esc(i.after) : ""}</td>
+      <td style="color:var(--dim)">${esc(i.basis)}</td>`;
+    tb.appendChild(tr);
+  });
+
+  $("issueNote").textContent =
+    `共 ${issues.length} 处异常，其中 ${n("auto")} 处可直接修复、${n("suggest")} 处仅建议、${n("review")} 处机器不替你猜。来源编码：${enc}`;
+
+  $("preview").textContent = out.slice(0, 9).map((r) => r.join(" | ")).join("\n");
+
+  $("btnCsv").disabled = false;
+  $("btnIssues").disabled = false;
+  drop.querySelector("b").textContent = `已读取：${state.name}`;
+}
+
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}
+
+function dl(name, text) {
+  const b = new Blob(["\ufeff" + text], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(b); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+$("btnCsv").addEventListener("click", () => dl("cleaned_" + state.name.replace(/\.\w+$/, "") + ".csv", toCSV(state.cleaned)));
+$("btnIssues").addEventListener("click", () => {
+  const head = ["行号", "列", "判定", "规则", "原值", "处理后", "依据"];
+  const lv = { auto: "已修复", suggest: "建议", review: "待决定" };
+  const body = state.issues.map((i) => [i.row, i.col, lv[i.level], i.rule, i.before, i.after, i.basis]);
+  dl("issues_" + state.name.replace(/\.\w+$/, "") + ".csv", toCSV([head].concat(body)));
+});
+
+/* ============================ 示例数据 ============================ */
+const DEMO = `商品名称,规格,单位,单价,数量,上架日期
+六角螺栓,M8*30,箱,"1,250.00",12,2026/3/5
+六角螺栓,M8×30,箱,"1,250",8,2026-03-06
+六角螺栓 ,M8 x 30 ,箱,１２５０,12,2026年3月7日
+六角螺母,M8*30,箱,860,30,2026/3/8
+平垫圈,M8*30,箱,120,100,2026/3/9
+不锈钢螺丝,M10*50,盒,"2,45",5,2026/3/10
+内六角螺栓,M10×50,盒,,7,2026/3/11
+,,,,,
+内六角螺栓,M10*50,盒,3300,7,2026/3/11
+弹簧垫圈,Φ12,个,45,200,2026/3/12
+`;
+
+/* 供自动化测试调用 */
+window.__td = { parseCSV, clean, toCSV, RULES, DEMO, run };
+</script>
+</body>
+</html>

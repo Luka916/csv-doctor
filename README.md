@@ -1,9 +1,11 @@
 # csv-doctor
 
-A single-file, offline CSV / Excel-export cleaner. No install, no upload, no account.
-Open `index.html` in a browser and paste your data in.
+**English** · [中文](https://luka916.github.io/csv-doctor/zh.html)
 
-**Live version:** https://luka916.github.io/csv-doctor/ — same file as `index.html`, served straight from this repo.
+A single-file, offline CSV / Excel-export cleaner. No install, no upload, no account.
+Open `index.html` in a browser and paste your data in. The Chinese build is `zh.html`.
+
+**Live version:** https://luka916.github.io/csv-doctor/ (English) · https://luka916.github.io/csv-doctor/zh.html (中文)
 
 ---
 
